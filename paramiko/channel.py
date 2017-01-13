@@ -74,7 +74,7 @@ class Channel (ClosingContextManager):
     flow-controlled independently.)  Similarly, if the server isn't reading
     data you send, calls to `send` may block, unless you set a timeout.  This
     is exactly like a normal network socket, so it shouldn't be too surprising.
-    
+
     Instances of this class may be used as context managers.
     """
 
@@ -416,7 +416,7 @@ class Channel (ClosingContextManager):
         generated, used, and returned.  You will need to use this value to
         verify incoming x11 requests and replace them with the actual local
         x11 cookie (which requires some knowledge of the x11 protocol).
-        
+
         If a handler is passed in, the handler is called from another thread
         whenever a new x11 connection arrives.  The default handler queues up
         incoming x11 connections, which may be retrieved using
@@ -666,15 +666,7 @@ class Channel (ClosingContextManager):
         except PipeTimeout:
             raise socket.timeout()
 
-        ack = self._check_add_window(len(out))
-        # no need to hold the channel lock when sending this
-        if ack > 0:
-            m = Message()
-            m.add_byte(cMSG_CHANNEL_WINDOW_ADJUST)
-            m.add_int(self.remote_chanid)
-            m.add_int(ack)
-            self.transport._send_user_message(m)
-
+        self._need_update_window(len(out))
         return out
 
     def recv_stderr_ready(self):
@@ -714,15 +706,7 @@ class Channel (ClosingContextManager):
         except PipeTimeout:
             raise socket.timeout()
 
-        ack = self._check_add_window(len(out))
-        # no need to hold the channel lock when sending this
-        if ack > 0:
-            m = Message()
-            m.add_byte(cMSG_CHANNEL_WINDOW_ADJUST)
-            m.add_int(self.remote_chanid)
-            m.add_int(ack)
-            self.transport._send_user_message(m)
-
+        self._need_update_window(len(out))
         return out
 
     def send_ready(self):
@@ -803,7 +787,7 @@ class Channel (ClosingContextManager):
             if sending stalled for longer than the timeout set by `settimeout`.
         :raises socket.error:
             if an error occurred before the entire string was sent.
-        
+
         .. note::
             If the channel is closed while only part of the data has been
             sent, there is no way to determine how much data (if any) was sent.
@@ -827,7 +811,7 @@ class Channel (ClosingContextManager):
             if sending stalled for longer than the timeout set by `settimeout`.
         :raises socket.error:
             if an error occurred before the entire string was sent.
-            
+
         .. versionadded:: 1.1
         """
         while s:
@@ -990,6 +974,7 @@ class Channel (ClosingContextManager):
         else:
             s = m.get_binary()
         self.in_buffer.feed(s)
+        self._need_update_window(len(s))
 
     def _feed_extended(self, m):
         code = m.get_int()
@@ -1001,6 +986,7 @@ class Channel (ClosingContextManager):
             self._feed(s)
         else:
             self.in_stderr_buffer.feed(s)
+        self._need_update_window(len(s))
 
     def _window_adjust(self, m):
         nbytes = m.get_int()
@@ -1262,6 +1248,16 @@ class Channel (ClosingContextManager):
         if self.ultra_debug:
             self._log(DEBUG, 'window down to %d' % self.out_window_size)
         return size
+
+    def _need_update_window(self, new_data_len):
+        ack = self._check_add_window(new_data_len)
+        if ack > 0:
+            m = Message()
+            m.add_byte(cMSG_CHANNEL_WINDOW_ADJUST)
+            self._log(DEBUG, "send MSG_CHANNEL_WINDOW_ADJUST, in _need_update_window")
+            m.add_int(self.remote_chanid)
+            m.add_int(ack)
+            self.transport._send_user_message(m)
 
 
 class ChannelFile (BufferedFile):
